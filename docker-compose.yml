@@ -1,0 +1,174 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://climateai:password@timescaledb:5432/climateai
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=your-secret-key-change-in-production
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ENVIRONMENT=development
+    depends_on:
+      - timescaledb
+      - redis
+    volumes:
+      - ./api:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - climateai-network
+
+  # Edge Gateway
+  edge:
+    build: ./edge
+    ports:
+      - "8001:8001"
+    environment:
+      - API_URL=http://api:8000
+      - MQTT_BROKER=mqtt://mqtt:1883
+      - EDGE_ID=edge-gateway-001
+    depends_on:
+      - mqtt
+    volumes:
+      - ./edge:/app
+      - edge_models:/models
+    networks:
+      - climateai-network
+
+  # ML Training Service
+  ml:
+    build: ./ml
+    environment:
+      - DATABASE_URL=postgresql://climateai:password@timescaledb:5432/climateai
+      - MODEL_REGISTRY=/models
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - timescaledb
+    volumes:
+      - ./ml:/app
+      - ml_models:/models
+    networks:
+      - climateai-network
+
+  # React Frontend
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000/ws
+      - REACT_APP_EDGE_URL=http://localhost:8001
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - climateai-network
+
+  # TimescaleDB (Time-series database)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    environment:
+      - POSTGRES_DB=climateai
+      - POSTGRES_USER=climateai
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - climateai-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass climateai123
+    volumes:
+      - redis_data:/data
+    networks:
+      - climateai-network
+
+  # MQTT Broker for IoT devices
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./infra/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt_data:/mosquitto/data
+      - mqtt_logs:/mosquitto/log
+    networks:
+      - climateai-network
+
+  # MLflow for model tracking
+  mlflow:
+    image: python:3.9-slim
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=postgresql://climateai:password@timescaledb:5432/mlflow
+    command: >
+      bash -c "pip install mlflow psycopg2-binary &&
+               mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri postgresql://climateai:password@timescaledb:5432/mlflow --default-artifact-root /mlflow/artifacts"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      - timescaledb
+    networks:
+      - climateai-network
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - climateai-network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - climateai-network
+
+volumes:
+  timescale_data:
+  redis_data:
+  ml_models:
+  edge_models:
+  mqtt_data:
+  mqtt_logs:
+  mlflow_artifacts:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  climateai-network:
+    driver: bridge
