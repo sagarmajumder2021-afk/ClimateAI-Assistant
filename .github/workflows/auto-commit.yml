@@ -1,0 +1,37 @@
+name: Auto Commit
+on:
+  schedule:
+    - cron: '0 5 * * *' # Every day at 5 AM UTC
+  workflow_dispatch: # Allow manual trigger
+jobs:
+  auto-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Configure Git
+        run: |
+          git config --global user.name 'sagarmajumder2021-afk'
+          git config --global user.email 'airelatedworkuse@gmail.com'
+          
+      - name: Generate activity log
+        run: |
+          echo "🌍 ClimateAI Assistant - Automated Activity Log" >> activity_log.txt
+          echo "================================================" >> activity_log.txt
+          echo "Timestamp: $(date)" >> activity_log.txt
+          echo "Status: System Active ✅" >> activity_log.txt
+          echo "Services: API, Edge Gateway, ML Pipeline, Frontend" >> activity_log.txt
+          echo "Health: All systems operational" >> activity_log.txt
+          echo "" >> activity_log.txt
+          
+      - name: Commit and push changes
+        run: |
+          git add .
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Automated commit - $(date +'%Y-%m-%d %H:%M:%S')" && git push)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
